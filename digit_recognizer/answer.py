@@ -58,6 +58,60 @@ def create_model(input_shape: Tuple[int, ...], output_shape: int, param: Param) 
     return model
 
 
+def complexize_kernel(layer, units, *, activation=None, **kwargs):
+    """乗算的なKerasレイヤーをFunctional APIとして複素化する。"""
+
+    def complexized(x_re, x_im):
+        layer_re = layer(units, **kwargs)
+        layer_im = layer(units, **kwargs)
+        x_re_tmp = layers.Subtract()([layer_re(x_re), layer_im(x_im)])
+        x_im_tmp = layers.Add()([layer_re(x_im), layer_im(x_re)])
+        x_re, x_im = x_re_tmp, x_im_tmp
+        if activation is None:
+            return x_re, x_im
+        x_abs = layers.Lambda(lambda x_cpx: K.sqrt(K.square(x_cpx[0]) + K.square(x_cpx[1])))([x_re, x_im])
+        x_act = activation(x_abs)
+        projection = layers.Lambda(lambda a: a[0] * a[1] / a[2])
+        x_re = projection([x_act, x_re, x_abs])
+        x_im = projection([x_act, x_im, x_abs])
+        return x_re, x_im
+
+    return complexized
+
+
+def create_complex_model(input_shape: Tuple[int, ...], output_shape: int, param: Param) -> keras.Model:
+    inputs = keras.Input(input_shape)
+    x = inputs
+    if param is not None:
+        x = layers.GaussianNoise(param.noise_stddev)(x)
+    x_re = x
+    x_im = layers.Lambda(lambda z: K.zeros(((1,) + input_shape)))([])
+
+    for filters, kernel_size, strides, pool_size, pool_stride \
+            in zip(param.conv_filters, param.kernel_sizes, param.strides, param.pool_sizes, param.pool_strides):
+        x_re, x_im = complexize_kernel(layers.Conv2D, filters, kernel_size=kernel_size,
+                                       strides=strides, activation=layers.Activation("tanh"))(x_re, x_im)
+        x_re = layers.BatchNormalization(axis=-1)(x_re)
+        x_im = layers.BatchNormalization(axis=-1)(x_im)
+        if pool_size is not None:
+            x_re = layers.AveragePooling2D(pool_size=pool_size, strides=pool_stride)(x_re)
+            x_im = layers.AveragePooling2D(pool_size=pool_size, strides=pool_stride)(x_im)
+    x_re = layers.Flatten()(x_re)
+    x_im = layers.Flatten()(x_im)
+    for units in param.dense_units:
+        x_re, x_im = complexize_kernel(layers.Dense, units, activation=layers.Activation("tanh"))(x_re, x_im)
+    # x = layers.Lambda(lambda d: K.sqrt(K.square(d[0]) + K.square(d[1])))([x_re, x_im])
+    if param.use_l2_constrained:
+        x = layers.Lambda(lambda z: K.l2_normalize(z, axis=1) * param.l2_scale)(x_re)
+        outputs = layers.Dense(output_shape, kernel_constraint=keras.constraints.UnitNorm(),
+                               use_bias=False, activation='softmax')(x)
+    else:
+        outputs = layers.Dense(output_shape, activation='softmax')(x_re)
+    model = keras.Model(inputs=inputs, outputs=outputs)
+    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    return model
+
+
 def main():
     param = Param(conv_filters=(16, 32, 64, 128), kernel_sizes=((3, 3),) * 4, strides=((1, 1),) * 4,
                   pool_sizes=((3, 3), None, (3, 3), None), pool_strides=((2, 2), None, (2, 2), None),
