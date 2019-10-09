@@ -55,7 +55,7 @@ def create_model(input_shape: Tuple[int, ...], output_shape: int, param: Param) 
     # x = layers.Lambda(lambda z: z / K.sqrt(K.var(z, axis=1, keepdims=True)))(x)
     for filters, kernel_size, strides, pool_size, pool_stride \
             in zip(param.conv_filters, param.kernel_sizes, param.strides, param.pool_sizes, param.pool_strides):
-        x = layers.Conv2D(filters, kernel_size, strides=strides)(x)
+        x = layers.Conv2D(filters, kernel_size, strides=strides, padding='same')(x)
         x = layers.BatchNormalization(axis=-1)(x)
         x = layers.ELU()(x)
         if pool_size is not None:
@@ -111,7 +111,8 @@ def create_complex_model(input_shape: Tuple[int, ...], output_shape: int, param:
     for filters, kernel_size, strides, pool_size, pool_stride \
             in zip(param.conv_filters, param.kernel_sizes, param.strides, param.pool_sizes, param.pool_strides):
         x_re, x_im = complexize_kernel(layers.Conv2D, filters, kernel_size=kernel_size,
-                                       strides=strides, activation=layers.Activation("tanh"))(x_re, x_im)
+                                       strides=strides, padding='same',
+                                       activation=layers.Activation("tanh"))(x_re, x_im)
         x_re = layers.BatchNormalization(axis=-1)(x_re)
         x_im = layers.BatchNormalization(axis=-1)(x_im)
         if pool_size is not None:
