@@ -59,13 +59,14 @@ class Param:
         self.noise_stddev = noise_stddev
 
 
-def create_model(input_shape: Tuple[int, ...], output_shape: int, param: Param) -> keras.Model:
-    inputs = keras.Input(input_shape)
+def create_model(param: Param) -> keras.Model:
+    inputs = keras.Input((28, 28, 1))
     x = inputs
     if param.noise_stddev is not None:
         x = layers.GaussianNoise(param.noise_stddev)(x)
     x = layers.Lambda(lambda z: z - K.mean(z, axis=1, keepdims=True))(x)
     # x = layers.Lambda(lambda z: z / K.sqrt(K.var(z, axis=1, keepdims=True)))(x)
+
     for i in range(len(param.conv_filters)):
         x = layers.Conv2D(param.conv_filters[i], kernel_size=param.kernel_sizes[i], strides=param.strides[i],
                           padding='same')(x)
@@ -85,10 +86,10 @@ def create_model(input_shape: Tuple[int, ...], output_shape: int, param: Param) 
     if param.l2_constrained_scale:
         scale = param.l2_constrained_scale
         x = layers.Lambda(lambda z: K.l2_normalize(z, axis=1) * scale)(x)
-        outputs = layers.Dense(output_shape, kernel_constraint=keras.constraints.UnitNorm(),
+        outputs = layers.Dense(10, kernel_constraint=keras.constraints.UnitNorm(),
                                use_bias=False)(x)
     else:
-        outputs = layers.Dense(output_shape)(x)
+        outputs = layers.Dense(10)(x)
 
     model = keras.Model(inputs=inputs, outputs=outputs)
     if param.center_loss_margin:
@@ -120,13 +121,13 @@ def complexize_kernel(layer, units, *, activation=None, **kwargs):
     return complexized
 
 
-def create_complex_model(input_shape: Tuple[int, ...], output_shape: int, param: Param) -> keras.Model:
-    inputs = keras.Input(input_shape)
+def create_complex_model(param: Param) -> keras.Model:
+    inputs = keras.Input((28, 28, 1))
     x = inputs
     if param is not None:
         x = layers.GaussianNoise(param.noise_stddev)(x)
     x_re = x
-    x_im = layers.Lambda(lambda z: K.zeros(((1,) + input_shape)))([])
+    x_im = layers.Lambda(lambda z: K.zeros((1, 28, 28, 1)))([])
 
     for i in range(len(param.conv_filters)):
         x_re, x_im = complexize_kernel(layers.Conv2D, param.conv_filters[i], kernel_size=param.kernel_sizes[i],
@@ -143,6 +144,7 @@ def create_complex_model(input_shape: Tuple[int, ...], output_shape: int, param:
             dropout_rate = param.conv_dropout_rates[i]
             x_re = layers.Dropout(dropout_rate)(x_re)
             x_im = layers.Dropout(dropout_rate)(x_im)
+
     x_re = layers.Flatten()(x_re)
     x_im = layers.Flatten()(x_im)
     for units, dropout_rate in zip(param.dense_units, param.dense_dropout_rates):
@@ -150,14 +152,16 @@ def create_complex_model(input_shape: Tuple[int, ...], output_shape: int, param:
         if dropout_rate is not None:
             x_re = layers.Dropout(dropout_rate)(x_re)
             x_im = layers.Dropout(dropout_rate)(x_im)
+
     # x = layers.Lambda(lambda d: K.sqrt(K.square(d[0]) + K.square(d[1])))([x_re, x_im])
     if param.l2_constrained_scale:
         x = layers.Lambda(lambda z: K.l2_normalize(z, axis=1) * param.l2_constrained_scale)(x_re)
-        outputs = layers.Dense(output_shape, kernel_constraint=keras.constraints.UnitNorm(),
+        outputs = layers.Dense(10, kernel_constraint=keras.constraints.UnitNorm(),
                                use_bias=False)(x)
     else:
-        outputs = layers.Dense(output_shape)(x_re)
+        outputs = layers.Dense(10)(x_re)
     model = keras.Model(inputs=inputs, outputs=outputs)
+
     if param.center_loss_margin:
         loss = CenterLoss(param.center_loss_margin)
     else:
@@ -195,7 +199,7 @@ def main():
         fill_mode='constant')
     datagen.fit(train_x)
 
-    model = create_model(train_x.shape[1:], train_y.shape[-1], param)
+    model = create_model(param)
     # model.load_weights(model_path)
     print(model.summary())
     model.fit_generator(
