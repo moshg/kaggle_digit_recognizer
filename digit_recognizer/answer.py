@@ -27,7 +27,8 @@ class CenterLoss:
 class Param:
     def __init__(self, conv_filters: Collection[int], kernel_sizes: Collection[Tuple[int, int]],
                  strides: Collection[Tuple[int, int]],
-                 pool_sizes: Collection[Tuple[int, int]], pool_strides: Collection[Tuple[int, int]],
+                 pool_sizes: Collection[Optional[Tuple[int, int]]],
+                 pool_strides: Collection[Optional[Tuple[int, int]]],
                  dense_units: Collection[int], l2_constrained_scale: Optional[float],
                  center_loss_margin: Optional[float],
                  noise_stddev: Optional[float]):
