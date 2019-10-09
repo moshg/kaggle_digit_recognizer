@@ -2,6 +2,8 @@ from typing import Tuple, Collection, Optional
 import os
 
 import numpy as np
+from keras.preprocessing.image import ImageDataGenerator
+from sklearn.model_selection import train_test_split
 import tensorflow as tf
 import keras
 from keras import layers
@@ -150,11 +152,23 @@ def main():
 
     train_x = train_x.reshape((train_x.shape[0], 28, 28, 1)) / 255
     train_y = keras.utils.to_categorical(train_y)
+    train_x, val_x, train_y, val_y = train_test_split(train_x, train_y, test_size=0.1)
+
+    datagen = ImageDataGenerator(
+        rotation_range=10,
+        zoom_range=0.1,
+        width_shift_range=0.1,
+        height_shift_range=0.1,
+        fill_mode='constant')
+    datagen.fit(train_x)
 
     model = create_model(train_x.shape[1:], train_y.shape[-1], param)
     # model.load_weights(model_path)
     print(model.summary())
-    model.fit(train_x, train_y, batch_size=1024, epochs=80, validation_split=0.2)
+    model.fit_generator(
+        datagen.flow(train_x, train_y, batch_size=1024),
+        validation_data=[val_x, val_y],
+        epochs=80, steps_per_epoch=train_x.shape[0] // 1024)
     model.save(os.path.join(RESULTS, 'model.h5'))
 
     test_x = np.loadtxt(TEST, delimiter=',', skiprows=1)
