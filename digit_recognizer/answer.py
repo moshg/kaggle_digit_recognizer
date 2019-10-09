@@ -2,6 +2,7 @@ from typing import Tuple, Collection, Optional
 import os
 
 import numpy as np
+import tensorflow as tf
 import keras
 from keras import layers
 from keras import backend as K
@@ -27,7 +28,8 @@ class Param:
     def __init__(self, conv_filters: Collection[int], kernel_sizes: Collection[Tuple[int, int]],
                  strides: Collection[Tuple[int, int]],
                  pool_sizes: Collection[Tuple[int, int]], pool_strides: Collection[Tuple[int, int]],
-                 dense_units: Collection[int], use_l2_constrained: bool, l2_scale: Optional[float],
+                 dense_units: Collection[int], l2_constrained_scale: Optional[float],
+                 center_loss_margin: Optional[float],
                  noise_stddev: Optional[float]):
         assert len(conv_filters) == len(kernel_sizes) == len(strides) == len(pool_sizes) == len(pool_strides)
         for pool_size, pool_stride in zip(pool_sizes, pool_strides):
@@ -39,8 +41,8 @@ class Param:
         self.pool_sizes = pool_sizes
         self.pool_strides = pool_strides
         self.dense_units = dense_units
-        self.use_l2_constrained = use_l2_constrained
-        self.l2_scale = l2_scale
+        self.l2_constrained_scale = l2_constrained_scale
+        self.center_loss_margin = center_loss_margin
         self.noise_stddev = noise_stddev
 
 
@@ -61,14 +63,19 @@ def create_model(input_shape: Tuple[int, ...], output_shape: int, param: Param) 
     x = layers.Flatten()(x)
     for units in param.dense_units:
         x = layers.Dense(units, activation='elu')(x)
-    if param.use_l2_constrained:
-        x = layers.Lambda(lambda z: K.l2_normalize(z, axis=1) * param.l2_scale)(x)
+    if param.l2_constrained_scale:
+        scale = param.l2_constrained_scale
+        x = layers.Lambda(lambda z: K.l2_normalize(z, axis=1) * scale)(x)
         outputs = layers.Dense(output_shape, kernel_constraint=keras.constraints.UnitNorm(),
-                               use_bias=False, activation='softmax')(x)
+                               use_bias=False)(x)
     else:
-        outputs = layers.Dense(output_shape, activation='softmax')(x)
+        outputs = layers.Dense(output_shape)(x)
     model = keras.Model(inputs=inputs, outputs=outputs)
-    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    if param.center_loss_margin:
+        loss = CenterLoss(param.center_loss_margin)
+    else:
+        loss = tf.losses.softmax_cross_entropy
+    model.compile(loss=loss, optimizer='adam', metrics=['accuracy'])
     return model
 
 
@@ -115,21 +122,25 @@ def create_complex_model(input_shape: Tuple[int, ...], output_shape: int, param:
     for units in param.dense_units:
         x_re, x_im = complexize_kernel(layers.Dense, units, activation=layers.Activation("tanh"))(x_re, x_im)
     # x = layers.Lambda(lambda d: K.sqrt(K.square(d[0]) + K.square(d[1])))([x_re, x_im])
-    if param.use_l2_constrained:
-        x = layers.Lambda(lambda z: K.l2_normalize(z, axis=1) * param.l2_scale)(x_re)
+    if param.l2_constrained_scale:
+        x = layers.Lambda(lambda z: K.l2_normalize(z, axis=1) * param.l2_constrained_scale)(x_re)
         outputs = layers.Dense(output_shape, kernel_constraint=keras.constraints.UnitNorm(),
-                               use_bias=False, activation='softmax')(x)
+                               use_bias=False)(x)
     else:
-        outputs = layers.Dense(output_shape, activation='softmax')(x_re)
+        outputs = layers.Dense(output_shape)(x_re)
     model = keras.Model(inputs=inputs, outputs=outputs)
-    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    if param.center_loss_margin:
+        loss = CenterLoss(param.center_loss_margin)
+    else:
+        loss = tf.losses.softmax_cross_entropy
+    model.compile(loss=loss, optimizer='adam', metrics=['accuracy'])
     return model
 
 
 def main():
     param = Param(conv_filters=(16, 32, 64, 128), kernel_sizes=((3, 3),) * 4, strides=((1, 1),) * 4,
                   pool_sizes=((3, 3), None, (3, 3), None), pool_strides=((2, 2), None, (2, 2), None),
-                  dense_units=(), use_l2_constrained=False, l2_scale=None, noise_stddev=0.02)
+                  dense_units=(), l2_constrained_scale=0.5, center_loss_margin=0.1, noise_stddev=0.02)
 
     train = np.loadtxt(TRAIN, delimiter=',', skiprows=1)
     train_x = train[:, 1:]
