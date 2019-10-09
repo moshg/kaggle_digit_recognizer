@@ -30,10 +30,10 @@ class Param:
     def __init__(
             self,
             conv_filters: Tuple[int, ...],
-            kernel_sizes: Tuple[Tuple[int, int], ...],
-            strides: Tuple[Tuple[int, int], ...],
-            pool_sizes: Tuple[Optional[Tuple[int, int]], ...],
-            pool_strides: Tuple[Optional[Tuple[int, int]], ...],
+            kernel_sizes: Tuple[int, ...],
+            strides: Tuple[int, ...],
+            pool_sizes: Tuple[Optional[int], ...],
+            pool_strides: Tuple[Optional[int], ...],
             conv_dropout_rates: Tuple[Optional[float], ...],
             dense_units: Tuple[int, ...],
             dense_dropout_rates: Tuple[Optional[float], ...],
@@ -44,13 +44,13 @@ class Param:
                == len(pool_sizes) == len(pool_strides) == len(conv_dropout_rates)
         assert len(dense_units) == len(dense_dropout_rates)
         for pool_size, pool_stride in zip(pool_sizes, pool_strides):
-            is_size_none, is_stride_none = pool_size is None, pool_stride is None
-            assert not (is_size_none ^ is_stride_none)
+            assert (pool_size is None) == (pool_stride is None)
+
         self.conv_filters = conv_filters
-        self.kernel_sizes = kernel_sizes
-        self.strides = strides
-        self.pool_sizes = pool_sizes
-        self.pool_strides = pool_strides
+        self.kernel_sizes = tuple((s, s) for s in kernel_sizes)
+        self.strides = tuple((s, s) for s in strides)
+        self.pool_sizes = tuple((s, s) if s is not None else None for s in pool_sizes)
+        self.pool_strides = tuple((s, s) if s is not None else None for s in pool_strides)
         self.conv_dropout_rates = conv_dropout_rates
         self.dense_units = dense_units
         self.dense_dropout_rates = dense_dropout_rates
@@ -167,12 +167,17 @@ def create_complex_model(input_shape: Tuple[int, ...], output_shape: int, param:
 
 
 def main():
-    param = Param(conv_filters=(16, 16, 32, 32, 64, 64), kernel_sizes=((5, 5),) * 6, strides=((1, 1),) * 6,
+    param = Param(conv_filters=(16, 16, 32, 32, 64, 64),
+                  kernel_sizes=(5,) * 6,
+                  strides=(1,) * 6,
                   conv_dropout_rates=(0.25,) * 6,
-                  pool_sizes=(None, (3, 3), None, (3, 3), None, (3, 3)),
-                  pool_strides=(None, (2, 2), None, (2, 2), None, (3, 3)),
-                  dense_units=(128,), dense_dropout_rates=(0.5,),
-                  l2_constrained_scale=0.5, center_loss_margin=0.1, noise_stddev=0.02)
+                  pool_sizes=(None, 3, None, 3, None, 3),
+                  pool_strides=(None, 2, None, 2, None, 3),
+                  dense_units=(128,),
+                  dense_dropout_rates=(0.5,),
+                  l2_constrained_scale=0.5,
+                  center_loss_margin=0.1,
+                  noise_stddev=0.02)
 
     train = np.loadtxt(TRAIN, delimiter=',', skiprows=1)
     train_x = train[:, 1:]
