@@ -9,6 +9,20 @@ from keras import backend as K
 from digit_recognizer import TRAIN, TEST, RESULTS
 
 
+def center_loss(y_true, y_pred, margin: float):
+    y_true = K.cast(y_true, y_pred.dtype)
+    return K.categorical_crossentropy(y_true, y_pred - y_true * margin, from_logits=True)
+
+
+class CenterLoss:
+    def __init__(self, margin: float):
+        self.margin = margin
+        self.__name__ = 'CenterLoss'
+
+    def __call__(self, y_true, y_pred):
+        return center_loss(y_true, y_pred, self.margin)
+
+
 class Param:
     def __init__(self, conv_filters: Collection[int], kernel_sizes: Collection[Tuple[int, int]],
                  strides: Collection[Tuple[int, int]],
