@@ -1,4 +1,4 @@
-from typing import Tuple, Collection, Optional
+from typing import Tuple, Optional
 import os
 
 import numpy as np
@@ -27,14 +27,22 @@ class CenterLoss:
 
 
 class Param:
-    def __init__(self, conv_filters: Collection[int], kernel_sizes: Collection[Tuple[int, int]],
-                 strides: Collection[Tuple[int, int]],
-                 pool_sizes: Collection[Optional[Tuple[int, int]]],
-                 pool_strides: Collection[Optional[Tuple[int, int]]],
-                 dense_units: Collection[int], l2_constrained_scale: Optional[float],
-                 center_loss_margin: Optional[float],
-                 noise_stddev: Optional[float]):
-        assert len(conv_filters) == len(kernel_sizes) == len(strides) == len(pool_sizes) == len(pool_strides)
+    def __init__(
+            self,
+            conv_filters: Tuple[int, ...],
+            kernel_sizes: Tuple[Tuple[int, int], ...],
+            strides: Tuple[Tuple[int, int], ...],
+            pool_sizes: Tuple[Optional[Tuple[int, int]], ...],
+            pool_strides: Tuple[Optional[Tuple[int, int]], ...],
+            conv_dropout_rates: Tuple[Optional[float], ...],
+            dense_units: Tuple[int, ...],
+            dense_dropout_rates: Tuple[Optional[float], ...],
+            l2_constrained_scale: Optional[float],
+            center_loss_margin: Optional[float],
+            noise_stddev: Optional[float]):
+        assert len(conv_filters) == len(kernel_sizes) == len(strides) \
+               == len(pool_sizes) == len(pool_strides) == len(conv_dropout_rates)
+        assert len(dense_units) == len(dense_dropout_rates)
         for pool_size, pool_stride in zip(pool_sizes, pool_strides):
             is_size_none, is_stride_none = pool_size is None, pool_stride is None
             assert not (is_size_none ^ is_stride_none)
@@ -43,7 +51,9 @@ class Param:
         self.strides = strides
         self.pool_sizes = pool_sizes
         self.pool_strides = pool_strides
+        self.conv_dropout_rates = conv_dropout_rates
         self.dense_units = dense_units
+        self.dense_dropout_rates = dense_dropout_rates
         self.l2_constrained_scale = l2_constrained_scale
         self.center_loss_margin = center_loss_margin
         self.noise_stddev = noise_stddev
@@ -56,16 +66,22 @@ def create_model(input_shape: Tuple[int, ...], output_shape: int, param: Param) 
         x = layers.GaussianNoise(param.noise_stddev)(x)
     x = layers.Lambda(lambda z: z - K.mean(z, axis=1, keepdims=True))(x)
     # x = layers.Lambda(lambda z: z / K.sqrt(K.var(z, axis=1, keepdims=True)))(x)
-    for filters, kernel_size, strides, pool_size, pool_stride \
-            in zip(param.conv_filters, param.kernel_sizes, param.strides, param.pool_sizes, param.pool_strides):
-        x = layers.Conv2D(filters, kernel_size, strides=strides, padding='same')(x)
+    for i in range(len(param.conv_filters)):
+        x = layers.Conv2D(param.conv_filters[i], kernel_size=param.kernel_sizes[i], strides=param.strides[i],
+                          padding='same')(x)
         x = layers.BatchNormalization(axis=-1)(x)
         x = layers.ELU()(x)
-        if pool_size is not None:
-            x = layers.MaxPooling2D(pool_size=pool_size, strides=pool_stride)(x)
+        if param.pool_sizes[i] is not None:
+            x = layers.MaxPooling2D(pool_size=param.pool_sizes[i], strides=param.pool_strides[i])(x)
+        if param.conv_dropout_rates[i] is not None:
+            x = layers.Dropout(param.conv_dropout_rates[i])(x)
     x = layers.Flatten()(x)
-    for units in param.dense_units:
+
+    for units, dropout_rate in zip(param.dense_units, param.dense_dropout_rates):
         x = layers.Dense(units, activation='elu')(x)
+        if dropout_rate is not None:
+            x = layers.Dropout(dropout_rate)(x)
+
     if param.l2_constrained_scale:
         scale = param.l2_constrained_scale
         x = layers.Lambda(lambda z: K.l2_normalize(z, axis=1) * scale)(x)
@@ -73,6 +89,7 @@ def create_model(input_shape: Tuple[int, ...], output_shape: int, param: Param) 
                                use_bias=False)(x)
     else:
         outputs = layers.Dense(output_shape)(x)
+
     model = keras.Model(inputs=inputs, outputs=outputs)
     if param.center_loss_margin:
         loss = CenterLoss(param.center_loss_margin)
@@ -111,20 +128,28 @@ def create_complex_model(input_shape: Tuple[int, ...], output_shape: int, param:
     x_re = x
     x_im = layers.Lambda(lambda z: K.zeros(((1,) + input_shape)))([])
 
-    for filters, kernel_size, strides, pool_size, pool_stride \
-            in zip(param.conv_filters, param.kernel_sizes, param.strides, param.pool_sizes, param.pool_strides):
-        x_re, x_im = complexize_kernel(layers.Conv2D, filters, kernel_size=kernel_size,
-                                       strides=strides, padding='same',
-                                       activation=layers.Activation("tanh"))(x_re, x_im)
+    for i in range(len(param.conv_filters)):
+        x_re, x_im = complexize_kernel(layers.Conv2D, param.conv_filters[i], kernel_size=param.kernel_sizes[i],
+                                       strides=param.strides[i],
+                                       padding='same', activation=layers.Activation("tanh"))(x_re, x_im)
         x_re = layers.BatchNormalization(axis=-1)(x_re)
         x_im = layers.BatchNormalization(axis=-1)(x_im)
-        if pool_size is not None:
-            x_re = layers.AveragePooling2D(pool_size=pool_size, strides=pool_stride)(x_re)
-            x_im = layers.AveragePooling2D(pool_size=pool_size, strides=pool_stride)(x_im)
+        if param.pool_sizes[i] is not None:
+            pool_size = param.pool_sizes[i]
+            pool_strides = param.pool_strides[i]
+            x_re = layers.AveragePooling2D(pool_size=pool_size, strides=pool_strides)(x_re)
+            x_im = layers.AveragePooling2D(pool_size=pool_size, strides=pool_strides)(x_im)
+        if param.conv_dropout_rates[i] is not None:
+            dropout_rate = param.conv_dropout_rates[i]
+            x_re = layers.Dropout(dropout_rate)(x_re)
+            x_im = layers.Dropout(dropout_rate)(x_im)
     x_re = layers.Flatten()(x_re)
     x_im = layers.Flatten()(x_im)
-    for units in param.dense_units:
+    for units, dropout_rate in zip(param.dense_units, param.dense_dropout_rates):
         x_re, x_im = complexize_kernel(layers.Dense, units, activation=layers.Activation("tanh"))(x_re, x_im)
+        if dropout_rate is not None:
+            x_re = layers.Dropout(dropout_rate)(x_re)
+            x_im = layers.Dropout(dropout_rate)(x_im)
     # x = layers.Lambda(lambda d: K.sqrt(K.square(d[0]) + K.square(d[1])))([x_re, x_im])
     if param.l2_constrained_scale:
         x = layers.Lambda(lambda z: K.l2_normalize(z, axis=1) * param.l2_constrained_scale)(x_re)
@@ -142,9 +167,12 @@ def create_complex_model(input_shape: Tuple[int, ...], output_shape: int, param:
 
 
 def main():
-    param = Param(conv_filters=(16, 32, 64, 128), kernel_sizes=((3, 3),) * 4, strides=((1, 1),) * 4,
-                  pool_sizes=((3, 3), None, (3, 3), None), pool_strides=((2, 2), None, (2, 2), None),
-                  dense_units=(), l2_constrained_scale=0.5, center_loss_margin=0.1, noise_stddev=0.02)
+    param = Param(conv_filters=(16, 16, 32, 32, 64, 64), kernel_sizes=((5, 5),) * 6, strides=((1, 1),) * 6,
+                  conv_dropout_rates=(0.25,) * 6,
+                  pool_sizes=(None, (3, 3), None, (3, 3), None, (3, 3)),
+                  pool_strides=(None, (2, 2), None, (2, 2), None, (3, 3)),
+                  dense_units=(128,), dense_dropout_rates=(0.5,),
+                  l2_constrained_scale=0.5, center_loss_margin=0.1, noise_stddev=0.02)
 
     train = np.loadtxt(TRAIN, delimiter=',', skiprows=1)
     train_x = train[:, 1:]
